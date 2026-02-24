@@ -1,0 +1,27 @@
+# EdgeMoon Configuration
+model:
+  input_dim: 80                  # Mel-spectrogram frequency bins
+  encoder_dim: 256
+  num_encoder_layers: 6          # Shallow for edge ~28M parameters total
+  num_attention_heads: 4
+  feed_forward_expansion_factor: 4
+  conv_expansion_factor: 2
+  conv_kernel_size: 31
+  dropout: 0.1
+  num_classes: 70                # Sindhi/Urdu phonemes + CTC blank
+  rope_base: 10000               # For Region-Aware RoPE
+  dra_threshold: 0.1             # Dynamic Routing Arbiter dropout probability for uninformative frames
+
+training:
+  batch_size: 32
+  learning_rate: 0.001
+  warmup_steps: 10000
+  weight_decay: 0.01
+  num_epochs: 50
+  mixed_precision: true
+
+data:
+  train_manifest: "data/train.jsonl"
+  val_manifest: "data/val.jsonl"
+  sample_rate: 16000
+  n_mels: 80

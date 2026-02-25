@@ -49,12 +49,12 @@ def apply_specaugment(x):
     # frequency and time masking
     return x # implementation omitted for brevity
 
-def train(config_path):
+def train(config_path, phase=1):
     with open(config_path, "r") as f:
         config = yaml.safe_load(f)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
+    print(f"Using device: {device} | Phase: {phase}")
 
     # Initialize model
     model = EdgeMoonConformer(
@@ -64,22 +64,43 @@ def train(config_path):
         heads=config["model"]["num_attention_heads"],
         classes=config["model"]["num_classes"]
     ).to(device)
+    
+    # Phase Setup
+    phase_key = f"phase_{phase}"
+    if phase_key in config:
+        phase_cfg = config[phase_key]
+        print(f"--- Phase {phase}: {phase_cfg.get('description')} ---")
+        lr = phase_cfg.get("learning_rate", 1e-3)
+        weight_decay = phase_cfg.get("weight_decay", 0.01)
+        if phase_cfg.get("freeze_lower_encoders"):
+            model.freeze_lower_layers(num_layers=3)
+    else:
+        # Fallback to standard config
+        lr = config["training"]["learning_rate"]
+        weight_decay = config["training"]["weight_decay"]
 
     # Optimizer
     optimizer = torch.optim.AdamW(
         model.parameters(), 
-        lr=config["training"]["learning_rate"], 
-        weight_decay=config["training"]["weight_decay"]
+        lr=lr, 
+        weight_decay=weight_decay
     )
     
     # CTC Loss
-    # blank_id is always 0
     criterion = nn.CTCLoss(blank=0, zero_infinity=True)
-    scaler = torch.cuda.amp.GradScaler(enabled=config["training"]["mixed_precision"])
+    
+    # Extract mixed precision flag safely
+    use_fp16 = False
+    if "training" in config:
+        prec = config["training"].get("precision", config["training"].get("mixed_precision", False))
+        use_fp16 = prec == "fp16" or prec is True
+        
+    scaler = torch.cuda.amp.GradScaler(enabled=use_fp16 and device.type == 'cuda')
 
     # DataLoader
+    batch_size = phase_cfg.get("batch_size", 32) if phase_key in config else config["training"]["batch_size"]
     dataset = MockSpeechDataset()
-    loader = DataLoader(dataset, batch_size=config["training"]["batch_size"], collate_fn=collate_fn, shuffle=True)
+    loader = DataLoader(dataset, batch_size=batch_size, collate_fn=collate_fn, shuffle=True)
 
     model.train()
     print("Starting 1-epoch smoke test training...")
@@ -91,7 +112,7 @@ def train(config_path):
 
             optimizer.zero_grad()
             
-            with torch.cuda.amp.autocast(enabled=config["training"]["mixed_precision"]):
+            with torch.cuda.amp.autocast(enabled=use_fp16 and device.type == 'cuda'):
                 logits, out_lens = model(mels, input_lens)
                 # CTC expects [T, B, C]
                 logits = logits.transpose(0, 1).log_softmax(2)
@@ -113,7 +134,9 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="config.yaml")
-    args = parser.parse_args() if len(os.sys.argv) > 1 else None
+    parser.add_argument("--phase", type=int, default=1, help="1 for Pretraining, 2 for Sindhi fine-tuning")
+    args = parser.parse_args() if len(os.sys.argv) > 1 else type('Args', (), {"config": "config.yaml", "phase": 1})()
     
-    config_file = "config.yaml"
-    train(config_file)
+    config_file = args.config
+    phase = args.phase
+    train(config_file, phase)

@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>EdgeMoon Voice Bridge</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=0">
+    <!-- Load Socket.IO from a CDN since the user wants mobile access without installing node -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js"></script>
+    <style>
+        body { 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+            text-align: center; 
+            padding: 20px; 
+            background: #121212; 
+            color: #ffffff;
+            margin: 0;
+        }
+        h2 { color: #f39c12; }
+        .config-panel {
+            background: #1e1e1e;
+            padding: 20px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+        }
+        select { 
+            padding: 12px; 
+            font-size: 16px; 
+            margin: 10px 0; 
+            border-radius: 5px;
+            width: 100%;
+            background: #2c3e50;
+            color: white;
+            border: 1px solid #34495e;
+        }
+        button { 
+            padding: 15px; 
+            font-size: 18px; 
+            border-radius: 8px; 
+            width: 100%; 
+            background: #2980b9; 
+            color: white; 
+            border: none; 
+            outline: none; 
+            transition: 0.2s;
+            cursor: pointer;
+            margin-bottom: 10px;
+        }
+        button:active { transform: scale(0.97); }
+        #talk_btn {
+            background: #c0392b;
+            height: 120px;
+            font-size: 24px;
+            font-weight: bold;
+            border-radius: 20px;
+            margin-top: 10px;
+            box-shadow: 0 4px 15px rgba(192, 57, 43, 0.4);
+        }
+        #log { 
+            margin-top: 20px; 
+            text-align: left; 
+            background: #000; 
+            padding: 15px; 
+            height: 250px; 
+            overflow-y: scroll; 
+            border-radius: 8px;
+            border: 1px solid #333;
+            font-size: 14px;
+        }
+        .msg { margin-bottom: 12px; border-bottom: 1px solid #222; padding-bottom: 5px; }
+        .sys { color: #aaaaaa; }
+        .inc { color: #2ecc71; font-size: 16px;}
+        .meta { color: #f1c40f; font-size: 12px; }
+        .pulse { animation: pulse-animation 1s infinite alternate; background: #e74c3c !important;}
+        @keyframes pulse-animation {
+            0% { transform: scale(1); }
+            100% { transform: scale(1.05); }
+        }
+    </style>
+</head>
+<body>
+    <h2>EdgeMoon Mobile Bridge</h2>
+    
+    <div class="config-panel">
+        <label>I am:</label>
+        <select id="device_id">
+            <option value="Device_A">Device A (Phone 1)</option>
+            <option value="Device_B">Device B (Phone 2)</option>
+        </select>
+        <label>Talking to:</label>
+        <select id="target_id">
+            <option value="Device_B">Target Device B</option>
+            <option value="Device_A">Target Device A</option>
+        </select>
+        <label>My Language:</label>
+        <select id="lang">
+            <option value="snd">Sindhi</option>
+            <option value="eng">English</option>
+        </select>
+        
+        <button id="connect_btn" onclick="connect()">Connect to Network</button>
+    </div>
+    
+    <div style="margin-top: 10px;">
+        <button id="talk_btn" 
+            onmousedown="startRecording()" onmouseup="stopRecording()" 
+            ontouchstart="startRecording(event)" ontouchend="stopRecording(event)" disabled>
+            Hold to Speak
+        </button>
+        <div style="font-size:12px; color:#888; margin-top:10px;">
+            Uses offline model mapping (<10M). Network: Direct WebSocket.
+        </div>
+    </div>
+    
+    <div id="log"></div>
+
+    <script>
+        let socket;
+        let mediaRecorder;
+        let audioChunks = [];
+
+        function log(msg, className="sys") {
+            const l = document.getElementById('log');
+            l.innerHTML += `<div class="msg ${className}">${msg}</div>`;
+            l.scrollTop = l.scrollHeight;
+        }
+
+        function connect() {
+            // Because we are on local network, connect securely
+            socket = io({secure: true, rejectUnauthorized: false});
+            
+            socket.on('connect', () => {
+                log("Online WebSocket Connected -> EdgeMoon Relay");
+                const dev = document.getElementById('device_id').value;
+                const tgt = document.getElementById('target_id').value;
+                const lang = document.getElementById('lang').value;
+                socket.emit('join', {device_id: dev, target_id: tgt, lang: lang});
+                
+                document.getElementById('connect_btn').style.background = '#27ae60';
+                document.getElementById('connect_btn').innerText = 'Connected';
+                document.getElementById('talk_btn').disabled = false;
+                
+                initMicrophone();
+            });
+
+            socket.on('status', (data) => {
+                log(data.msg);
+            });
+
+            socket.on('receive_translation', (data) => {
+                log(`[Incoming Translation] ${data.text} <br><span class="meta">${data.metrics}</span>`, 'inc');
+                speakText(data.text, data.lang);
+            });
+        }
+        
+        function initMicrophone() {
+            navigator.mediaDevices.getUserMedia({ audio: true })
+                .then(stream => {
+                    log("Microphone access granted.");
+                    mediaRecorder = new MediaRecorder(stream);
+                    mediaRecorder.ondataavailable = e => {
+                        audioChunks.push(e.data);
+                    };
+                    mediaRecorder.onstop = () => {
+                        const audioBlob = new Blob(audioChunks, { type: 'audio/webm' }); // Browsers often record in webm or ogg
+                        log("Transmitting raw voice buffer to Conformer STT...");
+                        socket.emit('audio_chunk', audioBlob);
+                        audioChunks = [];
+                    };
+                }).catch(err => {
+                    log("Microphone Error: " + err + "<br>Note: Browsers require HTTPS or localhost (127.0.0.1) to allow mic access.");
+                });
+        }
+
+        function startRecording(e) {
+            if (e) e.preventDefault(); // prevent mouse/touch conflict
+            if (mediaRecorder && mediaRecorder.state === "inactive") {
+                audioChunks = [];
+                mediaRecorder.start();
+                document.getElementById('talk_btn').classList.add('pulse');
+                document.getElementById('talk_btn').innerText = 'Listening...';
+                log("Recording...");
+            }
+        }
+
+        function stopRecording(e) {
+            if (e) e.preventDefault();
+            if (mediaRecorder && mediaRecorder.state === "recording") {
+                mediaRecorder.stop();
+                document.getElementById('talk_btn').classList.remove('pulse');
+                document.getElementById('talk_btn').innerText = 'Hold to Speak';
+            }
+        }
+
+        function speakText(text, lang) {
+            // Synthesize offline via Browser Web Speech API as fallback for the stub
+            const utterance = new SpeechSynthesisUtterance(text);
+            if(lang === 'eng') {
+                utterance.lang = 'en-US';
+            } else if (lang === 'snd') {
+                utterance.lang = 'ur-PK'; // Urdu voice works closest for Sindhi script on mobile
+            }
+            speechSynthesis.speak(utterance);
+        }
+    </script>
+</body>
+</html>

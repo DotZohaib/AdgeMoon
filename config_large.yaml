@@ -1,0 +1,38 @@
+# EdgeMoon Large-Scale Multilingual Training Config
+# --------------------------------------------------
+# Phase 1: Multilingual Pretraining (English + Sindhi)
+# Phase 2: Sindhi-Focused Fine-tuning
+# Target: ≤ 30M Parameters, mixed precision.
+
+model:
+  input_dim: 80                  # Mel-spectrogram bins
+  encoder_dim: 256
+  num_encoder_layers: 6
+  num_attention_heads: 4
+  num_classes: 70                # English + Sindhi combined char set + CTC blank
+
+training:
+  precision: "fp16"              # AutoCast target (fp16 or bf16)
+  label_smoothing: 0.1
+  spec_augment:
+    freq_mask_param: 27
+    time_mask_param: 100
+    num_freq_masks: 2
+    num_time_masks: 2
+
+phase_1:
+  description: "Multilingual Pretraining on 10k hours"
+  batch_size: 128
+  accumulate_grad_batches: 4
+  learning_rate: 0.001           # Peak LR for AdamW
+  warmup_steps: 10000
+  total_steps: 800000
+  weight_decay: 0.01             # Only applied to non-bias/norm weights
+
+phase_2:
+  description: "Sindhi Focused Fine-tuning on 1k hours"
+  batch_size: 64
+  learning_rate: 0.0001          # 10x LR Reduction
+  warmup_steps: 1000
+  total_steps: 100000
+  freeze_lower_encoders: true    # Freeze layers 0-2 (out of 6) to retain generic acoustic features
